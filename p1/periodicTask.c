@@ -8,6 +8,7 @@
  *
  *
  *****************************************************************/
+#define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
@@ -68,6 +69,7 @@ void * Thread_1_code(void *arg)
 	uint64_t min_iat, max_iat; // Hold the minimum/maximum observed inter arrival time
 	int niter = 0; 	// Activation counter
 	int update; 	// Flag to signal that min/max should be updated
+  int periods = 1000;
 
 	/* Set absolute activation time of first instance */
   //
@@ -75,10 +77,10 @@ void * Thread_1_code(void *arg)
 	tp.tv_sec = ((struct thread_args*)arg)->periodicity_s;
 	clock_gettime(CLOCK_MONOTONIC, &ts);
 	ts = TsAdd(ts,tp);
+  printf("Thread with TID %d, and scheduler %d\n\r", gettid(), sched_getscheduler(0));
 
 	/* Periodic jobs ...*/
-	while(1) {
-
+	while(periods > 0) {
 		/* Wait until next cycle */
 		clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME,&ts,NULL);
 		clock_gettime(CLOCK_MONOTONIC, &ta);
@@ -109,7 +111,7 @@ void * Thread_1_code(void *arg)
 
 
   		/* Print maximum/minimum inter-arrival time */
-		if(update) {
+		if(update || periods == 1) {
 		  printf("Task %s inter-arrival time (us): min: %10.3f / max: %10.3f \n\r", (char *)(((struct thread_args*)arg)->p_name) , (float)min_iat/1000, (float)max_iat/1000);
 		  update = 0;
 		}
@@ -119,6 +121,7 @@ void * Thread_1_code(void *arg)
 			Heavy_Work(TRUE); /* For the first activation estimate the execution time */
 		else
 			Heavy_Work(FALSE);
+    periods--;
 	}
     free(arg);
     return NULL;
@@ -129,8 +132,7 @@ void * Thread_1_code(void *arg)
 * **************************/
 #define PROCNAME_IDX 1
 #define PRIOTITY_IDX 2
-#define PERIODICITY_S_IDX 3
-#define PERIODICITY_NS_IDX 4
+#define PERIODICITY_NS_IDX 3
 
 //   0   1        2 3 4
 // ./pt somename 50 0 100000000
@@ -143,22 +145,39 @@ int main(int argc, char *argv[])
 	char procname[40];
   struct thread_args* th_ag = (struct thread_args *) malloc(sizeof(struct thread_args));
 
-
+  /* Variables*/
+  cpu_set_t cpuset;
+   //Forces the process to execute only on CPU0
+  CPU_ZERO(&cpuset);
+  CPU_SET(0,&cpuset);
+  if(sched_setaffinity(0, sizeof(cpuset), &cpuset)) {
+    printf("\n Lock of process to CPU0 failed!!!");
+    return(1);
+  }
 
 
 	/* Process input args */
-	if(argc != 5) {
-	  printf("Usage: %s PROCNAME PRIORITY PERIODICITY_S PERIODICITY_NS  , where PROCNAME is a string\n\r", argv[0]);
+	if(argc != 4) {
+	  printf("Usage: %s PROCNAME PRIORITY PERIODICITY_NS  , where PROCNAME is a string\n\r", argv[0]);
 	  return -1;
 	}
 
-  unsigned long t_s = strtoul(argv[3], NULL, 10);
-  unsigned long t_ns = strtoul(argv[4], NULL, 10);
-  int prio = atoi(argv[2]);
+  unsigned long t_ms = strtoul(argv[PERIODICITY_NS_IDX], NULL, 10);
+  int prio = atoi(argv[PRIOTITY_IDX]);
+
+  if(prio < 1 || prio > 99){
+    printf("Invalid priority value!");
+    return -1;
+  }
+
+  if(t_ms < 50 || t_ms > 500){
+    printf("Invalid periodicity milisecond component!");
+    return -1;
+  }
 
   strcpy(th_ag->p_name, argv[PROCNAME_IDX]);
-  memcpy(&(th_ag->periodicity_s), &t_s, sizeof(int) );
-  memcpy(&(th_ag->periodicity_ns), &t_ns, sizeof(int) );
+  (*th_ag).periodicity_s  = 0;
+  (*th_ag).periodicity_ns = t_ms * 1000000 ;
 	/* Create periodic thread/task */
   printf("T_s %d\t", th_ag->periodicity_s);
   printf("T_ns %d\t", th_ag->periodicity_ns);
